@@ -18,6 +18,11 @@ jobs:
       with:
         python-version: '3.11'
     
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xvfb
+    
     - name: Install Chrome
       uses: browser-actions/setup-chrome@latest
     
@@ -35,11 +40,22 @@ jobs:
         PRACTISCORE_PASSWORD: ${{ secrets.PRACTISCORE_PASSWORD }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         PHONE_NUMBER: ${{ secrets.PHONE_NUMBER }}
+        # Registration details for automatic form filling
+        REGISTRATION_FIRST_NAME: ${{ secrets.REGISTRATION_FIRST_NAME }}
+        REGISTRATION_LAST_NAME: ${{ secrets.REGISTRATION_LAST_NAME }}
+        REGISTRATION_EMAIL: ${{ secrets.REGISTRATION_EMAIL }}
+        REGISTRATION_POWER_FACTOR: ${{ secrets.REGISTRATION_POWER_FACTOR }}
         # Optional Twilio credentials (if you set up paid SMS)
         TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
         TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
         TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
-      run: python match_registrar.py
+        # Display for Chrome
+        DISPLAY: :99
+      run: |
+        echo "=== Running Chrome Debug Test ==="
+        xvfb-run --auto-servernum --server-num=1 python debug_chrome.py
+        echo "=== Running Match Registrar ==="
+        xvfb-run --auto-servernum --server-num=1 python match_registrar.py
     
     - name: Upload logs
       uses: actions/upload-artifact@v4

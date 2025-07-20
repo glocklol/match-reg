@@ -50,13 +50,40 @@ class PractiscoreRegistrar:
         
         # Setup Chrome options for headless browsing
         self.chrome_options = Options()
-        self.chrome_options.add_argument('--headless')
+        self.chrome_options.add_argument('--headless=new')
         self.chrome_options.add_argument('--no-sandbox')
         self.chrome_options.add_argument('--disable-dev-shm-usage')
         self.chrome_options.add_argument('--disable-gpu')
-        self.chrome_options.add_argument('--remote-debugging-port=9222')
-        self.chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        self.chrome_options.binary_location = '/snap/bin/chromium'
+        self.chrome_options.add_argument('--disable-extensions')
+        self.chrome_options.add_argument('--disable-web-security')
+        self.chrome_options.add_argument('--allow-running-insecure-content')
+        self.chrome_options.add_argument('--disable-background-timer-throttling')
+        self.chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+        self.chrome_options.add_argument('--disable-renderer-backgrounding')
+        self.chrome_options.add_argument('--disable-features=TranslateUI')
+        self.chrome_options.add_argument('--disable-ipc-flooding-protection')
+        self.chrome_options.add_argument('--window-size=1920,1080')
+        self.chrome_options.add_argument('--user-agent=Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        
+        # Set binary location based on environment  
+        chrome_binary_set = False
+        chrome_paths = [
+            '/snap/bin/chromium',
+            '/usr/bin/google-chrome', 
+            '/opt/hostedtoolcache/setup-chrome/chrome/stable/x64/chrome',
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chrome'
+        ]
+        
+        for chrome_path in chrome_paths:
+            if os.path.exists(chrome_path):
+                self.chrome_options.binary_location = chrome_path
+                logger.info(f"Using Chrome binary at: {chrome_path}")
+                chrome_binary_set = True
+                break
+        
+        if not chrome_binary_set:
+            logger.warning("No Chrome binary found in expected locations")
         
         self.session = requests.Session()
         self.session.headers.update({
@@ -74,37 +101,79 @@ class PractiscoreRegistrar:
         """Get all available matches from the club page"""
         logger.info("Fetching available matches from club page...")
         
-        driver = webdriver.Chrome(options=self.chrome_options)
+        # Log Chrome binary location being used
+        if hasattr(self.chrome_options, 'binary_location'):
+            logger.info(f"Chrome binary location: {self.chrome_options.binary_location}")
+        else:
+            logger.info("Using default Chrome binary location")
+        
+        # Log Chrome arguments being used
+        logger.info(f"Chrome arguments: {self.chrome_options.arguments}")
+        
         try:
+            # Set DISPLAY for headless mode if not set
+            import os
+            if 'DISPLAY' not in os.environ:
+                os.environ['DISPLAY'] = ':99'
+                logger.info("Set DISPLAY environment variable to :99")
+            
+            driver = webdriver.Chrome(options=self.chrome_options)
+            logger.info("Chrome driver initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Chrome driver: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return []
+        
+        try:
+            logger.info(f"Navigating to club URL: {self.club_url}")
             driver.get(self.club_url)
             time.sleep(3)  # Wait for page to load
+            
+            current_url = driver.current_url
+            page_title = driver.title
+            logger.info(f"Page loaded. Current URL: {current_url}, Title: {page_title}")
             
             # Look for match elements
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             matches = []
+            
+            logger.info(f"Page content length: {len(driver.page_source)} characters")
             
             # Find match containers (this will need to be adjusted based on actual HTML structure)
             match_elements = soup.find_all(['div', 'a'], class_=lambda x: x and any(
                 keyword in str(x).lower() for keyword in ['match', 'event', 'competition']
             ))
             
-            for element in match_elements:
-                if self.target_match.lower() in element.get_text().lower():
+            logger.info(f"Found {len(match_elements)} potential match elements")
+            
+            for i, element in enumerate(match_elements):
+                element_text = element.get_text().strip()
+                logger.debug(f"Element {i}: {element_text[:100]}...")  # First 100 chars
+                
+                if self.target_match.lower() in element_text.lower():
                     match_data = {
-                        'title': element.get_text().strip(),
+                        'title': element_text,
                         'url': element.get('href', ''),
                         'element': str(element)
                     }
                     matches.append(match_data)
+                    logger.info(f"Matched element: {element_text[:100]}...")
             
             logger.info(f"Found {len(matches)} matching events")
             return matches
             
         except Exception as e:
             logger.error(f"Error fetching matches: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
         finally:
-            driver.quit()
+            try:
+                driver.quit()
+                logger.info("Chrome driver closed")
+            except:
+                pass
     
     def login(self, driver) -> bool:
         """Login to PractiScore"""
@@ -112,30 +181,91 @@ class PractiscoreRegistrar:
         
         try:
             driver.get(self.login_url)
-            time.sleep(2)
-            
-            # Find and fill login form
-            username_field = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "username"))
-            )
-            password_field = driver.find_element(By.NAME, "password")
-            
-            username_field.send_keys(self.username)
-            password_field.send_keys(self.password)
-            
-            # Submit form
-            login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
-            login_button.click()
-            
             time.sleep(3)
             
+            # Try multiple selectors for username field
+            username_field = None
+            for selector in [
+                (By.NAME, "username"),
+                (By.NAME, "email"),
+                (By.ID, "username"),
+                (By.ID, "email"),
+                (By.XPATH, "//input[@type='email']"),
+                (By.XPATH, "//input[contains(@placeholder, 'email')]"),
+                (By.XPATH, "//input[contains(@placeholder, 'username')]")
+            ]:
+                try:
+                    username_field = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable(selector)
+                    )
+                    break
+                except:
+                    continue
+            
+            if not username_field:
+                logger.error("Could not find username/email field")
+                return False
+            
+            # Try multiple selectors for password field
+            password_field = None
+            for selector in [
+                (By.NAME, "password"),
+                (By.ID, "password"),
+                (By.XPATH, "//input[@type='password']")
+            ]:
+                try:
+                    password_field = driver.find_element(*selector)
+                    break
+                except:
+                    continue
+            
+            if not password_field:
+                logger.error("Could not find password field")
+                return False
+            
+            # Clear and fill fields
+            username_field.clear()
+            username_field.send_keys(self.username)
+            password_field.clear()
+            password_field.send_keys(self.password)
+            
+            time.sleep(1)
+            
+            # Try multiple selectors for submit button
+            submit_button = None
+            for selector in [
+                (By.XPATH, "//button[@type='submit']"),
+                (By.XPATH, "//input[@type='submit']"),
+                (By.XPATH, "//button[contains(text(), 'Sign In')]"),
+                (By.XPATH, "//button[contains(text(), 'Log In')]"),
+                (By.XPATH, "//button[contains(text(), 'Login')]")
+            ]:
+                try:
+                    submit_button = driver.find_element(*selector)
+                    break
+                except:
+                    continue
+            
+            if not submit_button:
+                logger.error("Could not find submit button")
+                return False
+            
+            submit_button.click()
+            time.sleep(4)
+            
             # Check if login was successful
-            if "login" not in driver.current_url.lower():
+            current_url = driver.current_url.lower()
+            page_source = driver.page_source.lower()
+            
+            if ("login" not in current_url and "sign" not in current_url) or "dashboard" in current_url:
                 logger.info("Login successful")
                 return True
-            else:
-                logger.error("Login failed")
+            elif "invalid" in page_source or "incorrect" in page_source:
+                logger.error("Login failed - invalid credentials")
                 return False
+            else:
+                logger.warning("Login status unclear, continuing...")
+                return True  # Assume success if no clear failure indicators
                 
         except Exception as e:
             logger.error(f"Login error: {e}")
@@ -243,9 +373,16 @@ class PractiscoreRegistrar:
         finally:
             driver.quit()
     
-    def register_for_match(self, match_url: str) -> bool:
+    def register_for_match(self, match_url: str, first_name: str = None, last_name: str = None, 
+                          email: str = None, power_factor: str = None) -> bool:
         """Attempt to register for a match"""
         logger.info(f"Attempting to register for match: {match_url}")
+        
+        # Get registration details from environment variables for security
+        reg_first_name = first_name or os.getenv('REGISTRATION_FIRST_NAME')
+        reg_last_name = last_name or os.getenv('REGISTRATION_LAST_NAME') 
+        reg_email = email or os.getenv('REGISTRATION_EMAIL')
+        reg_power_factor = power_factor or os.getenv('REGISTRATION_POWER_FACTOR', 'minor')
         
         driver = webdriver.Chrome(options=self.chrome_options)
         try:
@@ -258,21 +395,53 @@ class PractiscoreRegistrar:
             
             # Look for registration button
             register_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Register')]"))
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Register')] | //a[contains(text(), 'Register')]"))
             )
             register_button.click()
             
             time.sleep(3)
             
-            # Fill out registration form (this will need customization based on actual form)
-            # Common fields might include:
-            # - Division
-            # - Class
-            # - Special requirements
+            # Fill out registration form
+            try:
+                # Common form fields
+                if reg_first_name:
+                    first_name_field = driver.find_element(By.NAME, "first_name")
+                    first_name_field.clear()
+                    first_name_field.send_keys(reg_first_name)
+                    logger.info("Filled first name field")
+                    
+                if reg_last_name:
+                    last_name_field = driver.find_element(By.NAME, "last_name") 
+                    last_name_field.clear()
+                    last_name_field.send_keys(reg_last_name)
+                    logger.info("Filled last name field")
+                    
+                if reg_email:
+                    email_field = driver.find_element(By.NAME, "email")
+                    email_field.clear()
+                    email_field.send_keys(reg_email)
+                    logger.info("Filled email field")
+                
+                # Power factor selection
+                if reg_power_factor:
+                    try:
+                        power_factor_select = driver.find_element(By.NAME, "power_factor")
+                        for option in power_factor_select.find_elements(By.TAG_NAME, "option"):
+                            if reg_power_factor.lower() in option.text.lower():
+                                option.click()
+                                logger.info(f"Selected power factor: {reg_power_factor}")
+                                break
+                    except:
+                        logger.warning("Could not find power factor field")
+                
+                time.sleep(2)
+                
+            except Exception as form_error:
+                logger.warning(f"Form filling error (may be expected): {form_error}")
             
             # Submit registration
             submit_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[@type='submit']"))
+                EC.element_to_be_clickable((By.XPATH, "//button[@type='submit'] | //input[@type='submit']"))
             )
             submit_button.click()
             
@@ -280,7 +449,7 @@ class PractiscoreRegistrar:
             
             # Check for success message
             page_source = driver.page_source.lower()
-            if "registered" in page_source or "confirmation" in page_source:
+            if "registered" in page_source or "confirmation" in page_source or "success" in page_source:
                 logger.info("Registration successful!")
                 return True
             else:
