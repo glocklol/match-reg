@@ -52,7 +52,10 @@ class PractiscoreRegistrar:
         self.chrome_options.add_argument('--headless')
         self.chrome_options.add_argument('--no-sandbox')
         self.chrome_options.add_argument('--disable-dev-shm-usage')
+        self.chrome_options.add_argument('--disable-gpu')
+        self.chrome_options.add_argument('--remote-debugging-port=9222')
         self.chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+        self.chrome_options.binary_location = '/snap/bin/chromium'
         
         self.session = requests.Session()
         self.session.headers.update({
@@ -134,12 +137,53 @@ class PractiscoreRegistrar:
             logger.error(f"Login error: {e}")
             return False
     
+    def check_if_already_registered(self, match_url: str) -> bool:
+        """Check if user is already registered for a match"""
+        driver = webdriver.Chrome(options=self.chrome_options)
+        try:
+            if not self.login(driver):
+                logger.error("Failed to login while checking registration status")
+                return False
+            
+            full_url = match_url if match_url.startswith('http') else f"{self.base_url}{match_url}"
+            driver.get(full_url)
+            time.sleep(3)
+            
+            page_source = driver.page_source.lower()
+            
+            # Check for indicators that user is already registered
+            already_registered_indicators = [
+                "already registered",
+                "you are registered",
+                "unregister",
+                "withdraw",
+                "cancel registration",
+                f"{self.username.lower()}" in page_source  # Look for username in roster
+            ]
+            
+            for indicator in already_registered_indicators:
+                if indicator in page_source:
+                    logger.info("User is already registered for this match")
+                    return True
+            
+            return False
+                
+        except Exception as e:
+            logger.error(f"Error checking if already registered: {e}")
+            return False
+        finally:
+            driver.quit()
+
     def check_registration_status(self, match_url: str) -> str:
         """Check if registration is open for a match"""
         driver = webdriver.Chrome(options=self.chrome_options)
         try:
             if not self.login(driver):
                 return "login_failed"
+            
+            # First check if already registered
+            if self.check_if_already_registered(match_url):
+                return "already_registered"
             
             full_url = match_url if match_url.startswith('http') else f"{self.base_url}{match_url}"
             driver.get(full_url)
@@ -212,9 +256,38 @@ class PractiscoreRegistrar:
         finally:
             driver.quit()
     
+    def check_current_registrations(self):
+        """Check and log all current registrations"""
+        logger.info("Checking current registrations...")
+        
+        matches = self.get_available_matches()
+        if not matches:
+            logger.info("No matching events found")
+            return []
+        
+        registered_matches = []
+        for match in matches:
+            if 'register' in match.get('url', ''):
+                try:
+                    if self.check_if_already_registered(match['url']):
+                        registered_matches.append(match['title'])
+                        logger.info(f"✅ Already registered: {match['title']}")
+                except Exception as e:
+                    logger.error(f"Error checking registration for {match['title']}: {e}")
+        
+        if registered_matches:
+            logger.info(f"Currently registered for {len(registered_matches)} matches: {', '.join(registered_matches)}")
+        else:
+            logger.info("Not currently registered for any matches")
+            
+        return registered_matches
+    
     def run_check(self):
         """Main function to check for and register for matches"""
         logger.info("Starting match registration check...")
+        
+        # First, check what we're already registered for
+        self.check_current_registrations()
         
         matches = self.get_available_matches()
         if not matches:
@@ -227,7 +300,9 @@ class PractiscoreRegistrar:
             status = self.check_registration_status(match['url'])
             logger.info(f"Registration status: {status}")
             
-            if status == "open":
+            if status == "already_registered":
+                logger.info("✅ Already registered for this match - skipping")
+            elif status == "open":
                 success = self.register_for_match(match['url'])
                 if success:
                     logger.info("Successfully registered!")
