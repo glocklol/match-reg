@@ -1,0 +1,44 @@
+name: USPSA Match Auto-Registration
+
+on:
+  schedule:
+    # Run every day at 10:00 PM Central Time (3:00 AM UTC)
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  check-matches:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install Chrome
+      uses: browser-actions/setup-chrome@latest
+    
+    - name: Install ChromeDriver
+      uses: nanasess/setup-chromedriver@v2
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run match checker
+      env:
+        PRACTISCORE_USERNAME: ${{ secrets.PRACTISCORE_USERNAME }}
+        PRACTISCORE_PASSWORD: ${{ secrets.PRACTISCORE_PASSWORD }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python match_registrar.py
+    
+    - name: Upload logs
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: match-registrar-logs
+        path: match_registrar.log
