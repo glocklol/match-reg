@@ -20,6 +20,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from dotenv import load_dotenv
 import pytz
+from notifications import NotificationManager
 
 load_dotenv()
 
@@ -42,7 +43,7 @@ class PractiscoreRegistrar:
         
         self.username = os.getenv('PRACTISCORE_USERNAME')
         self.password = os.getenv('PRACTISCORE_PASSWORD')
-        self.target_match = os.getenv('TARGET_MATCH_NAME', 'NSPS Run & Gun')
+        self.target_match = os.getenv('TARGET_MATCH_NAME', 'NSPS')  # Match both Run & Gun and Practice
         
         if not self.username or not self.password:
             raise ValueError("PractiScore credentials not found in environment variables")
@@ -65,6 +66,9 @@ class PractiscoreRegistrar:
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
         })
+        
+        # Initialize notification manager
+        self.notifier = NotificationManager()
         
     def get_available_matches(self) -> List[Dict]:
         """Get all available matches from the club page"""
@@ -174,8 +178,36 @@ class PractiscoreRegistrar:
         finally:
             driver.quit()
 
-    def check_registration_status(self, match_url: str) -> str:
+    def is_paid_match(self, match_title: str, match_url: str) -> bool:
+        """Check if a match requires payment (classifiers, fees, etc.)"""
+        title_lower = match_title.lower()
+        
+        # Keywords that indicate paid matches
+        paid_indicators = [
+            "classifier",
+            "classifiers", 
+            "uspsa classifier",
+            "level ii",
+            "level 2",
+            "$",  # Dollar sign in title
+            "fee",
+            "cost",
+            "sanctioned"
+        ]
+        
+        for indicator in paid_indicators:
+            if indicator in title_lower:
+                logger.info(f"Detected paid match: {match_title} (contains '{indicator}')")
+                return True
+                
+        return False
+
+    def check_registration_status(self, match_url: str, match_title: str = "") -> str:
         """Check if registration is open for a match"""
+        # Check if it's a paid match first
+        if match_title and self.is_paid_match(match_title, match_url):
+            return "paid_match"
+            
         driver = webdriver.Chrome(options=self.chrome_options)
         try:
             if not self.login(driver):
@@ -190,6 +222,11 @@ class PractiscoreRegistrar:
             time.sleep(3)
             
             page_source = driver.page_source.lower()
+            
+            # Also check for payment indicators on the page
+            if any(indicator in page_source for indicator in ["payment", "credit card", "paypal", "stripe", "fee:", "cost:", "$"]):
+                logger.info("Detected payment requirements on registration page")
+                return "paid_match"
             
             if "registration not open" in page_source:
                 return "not_open"
@@ -295,19 +332,32 @@ class PractiscoreRegistrar:
             return
         
         for match in matches:
-            logger.info(f"Checking match: {match['title']}")
+            match_title = match.get('title', 'Unknown')
+            match_url = match.get('url', '')
             
-            status = self.check_registration_status(match['url'])
+            logger.info(f"Checking match: {match_title}")
+            
+            status = self.check_registration_status(match_url, match_title)
             logger.info(f"Registration status: {status}")
             
             if status == "already_registered":
                 logger.info("✅ Already registered for this match - skipping")
+            elif status == "paid_match":
+                logger.warning(f"💳 PAID MATCH DETECTED: {match_title}")
+                logger.warning("   This match requires payment (likely has classifiers or fees)")
+                logger.warning("   NOTIFICATION: Manual registration required")
+                logger.warning(f"   URL: {self.base_url}{match_url}")
+                self.notifier.notify_match_found(match_title, match_url, is_paid=True)
             elif status == "open":
-                success = self.register_for_match(match['url'])
+                logger.info("🟢 FREE match registration is open - attempting to register")
+                success = self.register_for_match(match_url)
                 if success:
                     logger.info("Successfully registered!")
-                    # TODO: Send notification
+                    self.notifier.notify_registration_success(match_title, match_url)
                     break  # Only register for one match to avoid duplicates
+                else:
+                    # Still notify about the attempt
+                    self.notifier.notify_match_found(match_title, match_url, is_paid=False)
             elif status == "not_open":
                 logger.info("Registration not yet open")
             elif status == "full":
