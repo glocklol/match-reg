@@ -48,22 +48,29 @@ class PractiscoreRegistrar:
         if not self.username or not self.password:
             raise ValueError("PractiScore credentials not found in environment variables")
         
-        # Setup Chrome options for headless browsing
+        # Setup Chrome options for headless browsing with Cloudflare bypass
         self.chrome_options = Options()
         self.chrome_options.add_argument('--headless=new')
         self.chrome_options.add_argument('--no-sandbox')
         self.chrome_options.add_argument('--disable-dev-shm-usage')
         self.chrome_options.add_argument('--disable-gpu')
         self.chrome_options.add_argument('--disable-extensions')
-        self.chrome_options.add_argument('--disable-web-security')
-        self.chrome_options.add_argument('--allow-running-insecure-content')
-        self.chrome_options.add_argument('--disable-background-timer-throttling')
-        self.chrome_options.add_argument('--disable-backgrounding-occluded-windows')
-        self.chrome_options.add_argument('--disable-renderer-backgrounding')
-        self.chrome_options.add_argument('--disable-features=TranslateUI')
-        self.chrome_options.add_argument('--disable-ipc-flooding-protection')
+        self.chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+        self.chrome_options.add_argument('--disable-features=VizDisplayCompositor')
         self.chrome_options.add_argument('--window-size=1920,1080')
-        self.chrome_options.add_argument('--user-agent=Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        self.chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36')
+        
+        # Add experimental options to avoid detection
+        self.chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        self.chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        # Additional preferences to appear more like a real browser
+        prefs = {
+            "profile.default_content_setting_values.notifications": 2,
+            "profile.default_content_settings.popups": 0,
+            "profile.managed_default_content_settings.images": 2
+        }
+        self.chrome_options.add_experimental_option("prefs", prefs)
         
         # Set binary location based on environment  
         chrome_binary_set = False
@@ -118,6 +125,10 @@ class PractiscoreRegistrar:
                 logger.info("Set DISPLAY environment variable to :99")
             
             driver = webdriver.Chrome(options=self.chrome_options)
+            
+            # Execute script to remove webdriver property  
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
             logger.info("Chrome driver initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Chrome driver: {e}")
@@ -127,18 +138,36 @@ class PractiscoreRegistrar:
         
         try:
             logger.info(f"Navigating to club URL: {self.club_url}")
-            driver.get(self.club_url)
-            time.sleep(3)  # Wait for page to load
             
-            current_url = driver.current_url
-            page_title = driver.title
-            logger.info(f"Page loaded. Current URL: {current_url}, Title: {page_title}")
+            # Try multiple times if Cloudflare blocks us
+            for attempt in range(3):
+                driver.get(self.club_url)
+                time.sleep(5)  # Wait longer for page to load
+                
+                current_url = driver.current_url
+                page_title = driver.title
+                page_length = len(driver.page_source)
+                
+                logger.info(f"Attempt {attempt + 1}: URL: {current_url}, Title: {page_title}, Length: {page_length}")
+                
+                # Check if we're blocked by Cloudflare
+                if "cloudflare" in page_title.lower() or page_length < 10000:
+                    logger.warning(f"Attempt {attempt + 1}: Detected Cloudflare block, retrying...")
+                    if attempt < 2:  # Don't sleep on last attempt
+                        time.sleep(10)  # Wait longer between attempts
+                    continue
+                else:
+                    logger.info("Successfully loaded PractiScore page")
+                    break
+            else:
+                logger.error("Failed to bypass Cloudflare after 3 attempts")
+                return []
             
             # Look for match elements
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             matches = []
             
-            logger.info(f"Page content length: {len(driver.page_source)} characters")
+            logger.info(f"Final page content length: {len(driver.page_source)} characters")
             
             # Find match containers (this will need to be adjusted based on actual HTML structure)
             match_elements = soup.find_all(['div', 'a'], class_=lambda x: x and any(
