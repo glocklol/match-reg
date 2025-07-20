@@ -14,7 +14,7 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
@@ -41,27 +41,8 @@ jobs:
         TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
       run: python match_registrar.py
     
-    - name: Send email notification on match found
-      if: always()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.GMAIL_USERNAME }}
-        password: ${{ secrets.GMAIL_PASSWORD }}
-        subject: "USPSA Match Check Results"
-        to: ${{ secrets.SMS_EMAIL }}
-        from: GitHub Actions <noreply@github.com>
-        body: |
-          USPSA Match Registration Check Complete
-          
-          Check the GitHub Actions logs and any created issues for details.
-          
-          Time: ${{ github.run_id }}
-          Repository: ${{ github.repository }}
-    
     - name: Upload logs
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: match-registrar-logs
